@@ -1,6 +1,6 @@
 {
   "name": "cadastral-mcp",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "브이월드(국토교통부) API 기반 토지이용계획·지적도 MCP 서버 — 토지이용계획 조회 + 지적도 DXF 내보내기",
   "type": "module",
   "main": "build/index.js",
@@ -31,11 +31,16 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@tarikjabiri/dxf": "^2.8.9",
+    "delaunator": "^5.1.0",
     "dotenv": "^17.3.1",
+    "earcut": "^3.2.3",
     "kordoc": "^4.0.6",
+    "polygon-clipping": "^0.15.7",
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@types/delaunator": "^5.0.3",
+    "@types/earcut": "^3.0.0",
     "@types/node": "^22.19.3",
     "typescript": "^5.9.3",
     "vitest": "^4.1.9"

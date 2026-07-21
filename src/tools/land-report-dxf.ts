@@ -16,6 +16,7 @@ import {
   boundingBoxOf,
 } from "../lib/vworld-client.js"
 import { buildLandReportDxf, type LandReportInfo } from "../lib/dxf-builder.js"
+import { readTopoDxf, clipTopoEntities, summarizeTopo, type TopoEntity } from "../lib/topo-dxf-reader.js"
 import { applyXclip } from "../lib/xclip.js"
 import { findZoningStandard, buildingCoverageCell, floorAreaRatioCell, landscapeCell } from "../lib/zoning-standards.js"
 import {
@@ -56,6 +57,12 @@ const sharedFields = {
     .optional()
     .describe(`주변 필지 조회 범위(m). 기본값 ${DEFAULT_BUFFER_METERS}. 미지정 시 먼저 사용자에게 물어볼 것.`),
   stdrYear: z.string().optional().describe("개별공시지가 기준연도 (미지정 시 올해)"),
+  topoDxfPath: z
+    .string()
+    .optional()
+    .describe(
+      "(선택) map.ngii.go.kr에서 받은 수치지형도 V1.0 DXF 절대경로. 주면 지적도 패널에 등고선·건물·도로·하천이 함께 겹쳐 그려짐."
+    ),
 }
 
 export const ExportLandReportDxfSchema = z.object({
@@ -74,7 +81,8 @@ async function buildAndWriteReport(
   includeNeighbors: boolean,
   bufferMeters: number,
   stdrYear: string | undefined,
-  refinedAddress?: string
+  refinedAddress?: string,
+  topoDxfPath?: string
 ) {
   const target = await getParcelGeometry(pnu, crs)
   if (!target || target.polygons.length === 0) {
@@ -85,6 +93,32 @@ async function buildAndWriteReport(
   }
 
   const queryBBox = boundingBoxOf(target, bufferMeters)
+
+  // (선택) 수치지형도 DXF가 주어지면 읽어서 대상 필지 버퍼 범위로 클립
+  let topoEntities: TopoEntity[] | undefined
+  let topoStatus = "미첨부 (topoDxfPath 없음 — 지적도만 표시)"
+  if (topoDxfPath) {
+    if (!fs.existsSync(topoDxfPath)) {
+      topoStatus = `⚠ 파일 없음: ${topoDxfPath} — 지형 없이 진행`
+    } else {
+      const all = readTopoDxf(topoDxfPath)
+      const summary = summarizeTopo(all)
+      const overlaps =
+        summary.extent &&
+        !(
+          summary.extent.maxX < queryBBox.minX ||
+          summary.extent.minX > queryBBox.maxX ||
+          summary.extent.maxY < queryBBox.minY ||
+          summary.extent.minY > queryBBox.maxY
+        )
+      if (!overlaps) {
+        topoStatus = "⚠ 수치지형도 도엽 범위가 대상 필지와 겹치지 않음 — 다른 지역 도엽이거나 좌표계 불일치. 지형 생략"
+      } else {
+        topoEntities = clipTopoEntities(all, queryBBox)
+        topoStatus = `첨부됨 — 클립 후 ${topoEntities.length}개 지형 엔티티를 지적도 패널에 겹침`
+      }
+    }
+  }
   const [neighbors, landRegister, landUseZones, individualLandPrice] = await Promise.all([
     includeNeighbors ? getParcelsInBBox(queryBBox, crs, pnu) : Promise.resolve([]),
     getLandRegister(pnu),
@@ -144,7 +178,7 @@ async function buildAndWriteReport(
       : landscapeCell(landUseZones),
   }
 
-  const { dxfText, mapBlockName, mapClipBox } = buildLandReportDxf(target, neighbors, queryBBox, info)
+  const { dxfText, mapBlockName, mapClipBox } = buildLandReportDxf(target, neighbors, queryBBox, info, topoEntities)
   const filePath = path.join(outputDir(), `land_report_${pnu}.dxf`)
   fs.writeFileSync(filePath, dxfText, "utf-8")
 
@@ -178,6 +212,7 @@ async function buildAndWriteReport(
       주차: "고정값 사용 (주차장법 시행령 별표1은 구조화되지 않은 원문이라 실시간 파싱 미지원)",
     },
     지적도_XCLIP크롭: xclip.applied ? "적용됨" : `미적용 — ${xclip.message}`,
+    수치지형도_병합: topoStatus,
     파일경로: filePath,
     안내: DISCLAIMER,
   }
@@ -188,7 +223,7 @@ export async function exportLandReportDxf(
   args: z.infer<typeof ExportLandReportDxfSchema>
 ): Promise<ToolResponse> {
   try {
-    const { address, crs, includeNeighbors, bufferMeters, stdrYear } = args
+    const { address, crs, includeNeighbors, bufferMeters, stdrYear, topoDxfPath } = args
     const { pnu, refinedAddress } = await addressToPnu(address)
     const result = await buildAndWriteReport(
       pnu,
@@ -196,7 +231,8 @@ export async function exportLandReportDxf(
       includeNeighbors ?? true,
       bufferMeters ?? DEFAULT_BUFFER_METERS,
       stdrYear,
-      refinedAddress
+      refinedAddress,
+      topoDxfPath
     )
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
   } catch (error) {
@@ -209,7 +245,7 @@ export async function exportLandReportDxfByPnu(
   args: z.infer<typeof ExportLandReportDxfByPnuSchema>
 ): Promise<ToolResponse> {
   try {
-    const { pnu, crs, includeNeighbors, bufferMeters, stdrYear } = args
+    const { pnu, crs, includeNeighbors, bufferMeters, stdrYear, topoDxfPath } = args
     if (pnu.length !== 19) {
       return {
         content: [{ type: "text", text: `[ERROR] PNU는 19자리여야 합니다. 입력: ${pnu} (${pnu.length}자리)` }],
@@ -221,7 +257,9 @@ export async function exportLandReportDxfByPnu(
       crs || DEFAULT_CRS,
       includeNeighbors ?? true,
       bufferMeters ?? DEFAULT_BUFFER_METERS,
-      stdrYear
+      stdrYear,
+      undefined,
+      topoDxfPath
     )
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
   } catch (error) {

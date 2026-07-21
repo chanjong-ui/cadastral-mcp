@@ -19,6 +19,7 @@ import {
 } from "@tarikjabiri/dxf"
 import type { ParcelGeometry, NeighborParcel, BBox } from "./vworld-client.js"
 import { buildingCoverageCell, floorAreaRatioCell, landscapeCell, PARKING_STANDARD_CELL } from "./zoning-standards.js"
+import type { TopoEntity, TopoCategory } from "./topo-dxf-reader.js"
 
 const LAYER_TARGET_BOUNDARY = "TARGET_PARCEL"
 const LAYER_TARGET_LABEL = "TARGET_LABEL"
@@ -31,6 +32,25 @@ const LAYER_PANEL_TITLE = "PANEL_TITLE"
 const LAYER_PANEL_TITLE_ICON = "PANEL_TITLE_ICON"
 const LAYER_PANEL_TITLE_RULE = "PANEL_TITLE_RULE"
 const LAYER_TABLE_GRID = "TABLE_GRID"
+
+// 수치지형도 병합용 레이어 (지적도 블록 안에 함께 그려 XCLIP 대상이 됨)
+const LAYER_TOPO_CONTOUR = "지형_등고선"
+const LAYER_TOPO_SPOT = "지형_표고점"
+const LAYER_TOPO_BUILDING = "지형_건물"
+const LAYER_TOPO_ROAD = "지형_도로"
+const LAYER_TOPO_RIVER = "지형_하천"
+
+const TOPO_CATEGORY_LAYER: Record<TopoCategory, string | null> = {
+  등고선: LAYER_TOPO_CONTOUR,
+  표고점: LAYER_TOPO_SPOT,
+  건물: LAYER_TOPO_BUILDING,
+  도로중심선: LAYER_TOPO_ROAD,
+  도로경계: LAYER_TOPO_ROAD,
+  하천중심선: LAYER_TOPO_RIVER,
+  실폭하천: LAYER_TOPO_RIVER,
+  기타지형: null,
+  기타: null,
+}
 
 const FONT_STYLE_NAME = "돋움"
 const FONT_FILE_NAME = "dotum.ttf"
@@ -116,6 +136,75 @@ function registerMapLayers(dxf: DxfWriter) {
   dxf.addLayer(LAYER_NEIGHBOR_BOUNDARY, Colors.Blue, "CONTINUOUS")
   dxf.addLayer(LAYER_NEIGHBOR_LABEL, Colors.Blue, "CONTINUOUS")
   dxf.addLayer(LAYER_NOTE, Colors.Green, "CONTINUOUS")
+}
+
+function registerTopoLayers(dxf: DxfWriter) {
+  dxf.addLayer(LAYER_TOPO_CONTOUR, Colors.Yellow, "CONTINUOUS") // 등고선 노랑
+  dxf.addLayer(LAYER_TOPO_SPOT, Colors.Yellow, "CONTINUOUS")
+  dxf.addLayer(LAYER_TOPO_BUILDING, Colors.Cyan, "CONTINUOUS") // 건물 청록
+  dxf.addLayer(LAYER_TOPO_ROAD, 8 /* 회색 */, "CONTINUOUS") // 도로 회색
+  dxf.addLayer(LAYER_TOPO_RIVER, 5 /* 파랑 */, "CONTINUOUS") // 하천 파랑
+}
+
+/**
+ * 지적도 블록(DrawTarget) 안에 수치지형도 엔티티를 그린다. 지적 경계와 같은 좌표계(EPSG:5186)라
+ * 변환 없이 겹친다. 블록 안에 그리므로 지적도와 함께 XCLIP(패널 경계) 대상이 된다.
+ * DrawTarget이 addLWPolyline/addText만 지원하므로 표고점 마커는 작은 마름모 폴리라인으로 그린다.
+ */
+function drawTopoIntoMap(dxf: DrawTarget, topoEntities: TopoEntity[], queryBBox: BBox) {
+  const extent = Math.max(queryBBox.maxX - queryBBox.minX, queryBBox.maxY - queryBBox.minY)
+  const labelH = Math.max(extent * 0.012, 0.2)
+  let contourLabelCount = 0
+
+  for (const e of topoEntities) {
+    const layer = TOPO_CATEGORY_LAYER[e.category]
+    if (!layer) continue
+
+    if (e.category === "표고점") {
+      const p = e.points[0]
+      if (!p) continue
+      const [x, y] = p
+      const s = labelH * 0.35
+      // 작은 마름모 마커
+      dxf.addLWPolyline(
+        [
+          { point: point2d(x, y + s) },
+          { point: point2d(x + s, y) },
+          { point: point2d(x, y - s) },
+          { point: point2d(x - s, y) },
+        ],
+        { layerName: layer, flags: LWPolylineFlags.Closed }
+      )
+      if (e.elevation !== undefined) {
+        addAlignedText(
+          dxf,
+          x + s * 1.6,
+          y,
+          labelH,
+          e.elevation.toFixed(1),
+          layer,
+          TextHorizontalAlignment.Left,
+          TextVerticalAlignment.Middle
+        )
+      }
+      continue
+    }
+
+    if (e.points.length < 2) continue
+    const closed = e.category === "건물"
+    dxf.addLWPolyline(
+      e.points.map(([x, y]) => ({ point: point2d(x, y) })),
+      { layerName: layer, flags: closed ? LWPolylineFlags.Closed : 0 }
+    )
+
+    if (e.category === "등고선" && e.elevation !== undefined && e.points.length > 6) {
+      contourLabelCount++
+      if (contourLabelCount % 4 === 0) {
+        const mid = e.points[Math.floor(e.points.length / 2)]
+        addCenteredText(dxf, mid[0], mid[1], labelH, String(Math.round(e.elevation)), LAYER_TOPO_CONTOUR)
+      }
+    }
+  }
 }
 
 /**
@@ -364,11 +453,13 @@ export function buildLandReportDxf(
   target: ParcelGeometry,
   neighbors: NeighborParcel[],
   queryBBox: BBox,
-  info: LandReportInfo
+  info: LandReportInfo,
+  topoEntities?: TopoEntity[]
 ): LandReportDxf {
   const dxf = new DxfWriter()
   registerFontStyle(dxf)
   registerMapLayers(dxf)
+  if (topoEntities && topoEntities.length > 0) registerTopoLayers(dxf)
   dxf.addLayer(LAYER_PANEL_BORDER, Colors.Cyan, "CONTINUOUS")
   dxf.addLayer(LAYER_PANEL_TEXT, Colors.Green, "CONTINUOUS")
   dxf.addLayer(LAYER_PANEL_TITLE, Colors.Green, "CONTINUOUS")
@@ -392,6 +483,8 @@ export function buildLandReportDxf(
   const mapY0 = queryBBox.minY
   const mapY1 = queryBBox.maxY
   const mapBlock = dxf.addBlock(MAP_BLOCK_NAME)
+  // 지형을 먼저 그려 배경으로 깔고, 지적 경계를 그 위에 그려 필지선이 잘 보이게 한다.
+  if (topoEntities && topoEntities.length > 0) drawTopoIntoMap(mapBlock, topoEntities, queryBBox)
   drawParcelMap(mapBlock, target, neighbors, queryBBox)
   dxf.addInsert(MAP_BLOCK_NAME, point3d(0, 0, 0))
   drawPanelBorder(dxf, mapX0, mapY0, mapX1, mapY1)

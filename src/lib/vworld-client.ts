@@ -271,3 +271,42 @@ export async function getParcelsInBBox(
       }
     })
 }
+
+export interface BuildingFootprint {
+  건물명: string
+  지상층수: number
+  polygons: number[][][][]
+}
+
+/**
+ * 경계상자 내 건물 외곽선 + 지상층수 조회 (도로명주소건물 LT_C_SPBD).
+ * gro_flo_co(지상층수)로 3D extrude 높이를 추정한다(층수 × 층고). 층수 없으면 0.
+ */
+export async function getBuildingsInBBox(bbox: BBox, crs: string): Promise<BuildingFootprint[]> {
+  requireVworldKey()
+
+  const geomFilter = `BOX(${bbox.minX},${bbox.minY},${bbox.maxX},${bbox.maxY})`
+  const url = `https://api.vworld.kr/req/data?service=data&request=GetFeature&data=LT_C_SPBD&key=${VWORLD_KEY}${domainParam()}&geomFilter=${encodeURIComponent(geomFilter)}&format=json&crs=${crs}&size=1000`
+  const raw = await httpGet(url)
+  const json = JSON.parse(raw)
+
+  if (json?.response?.status !== "OK") return []
+
+  const features = json?.response?.result?.featureCollection?.features || []
+
+  return features.map((f: any) => {
+    const geometry = f.geometry
+    const polygons: number[][][][] =
+      geometry?.type === "MultiPolygon"
+        ? geometry.coordinates
+        : geometry?.type === "Polygon"
+          ? [geometry.coordinates]
+          : []
+    const floors = Number(f.properties?.gro_flo_co)
+    return {
+      건물명: f.properties?.buld_nm || "",
+      지상층수: Number.isFinite(floors) ? floors : 0,
+      polygons,
+    }
+  })
+}

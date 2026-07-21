@@ -27,6 +27,12 @@ import {
   getNationalLawText,
   GetNationalLawTextSchema,
 } from "./tools/national-law.js"
+import {
+  exportSite3dDxf,
+  ExportSite3dDxfSchema,
+  exportSite3dDxfByPnu,
+  ExportSite3dDxfByPnuSchema,
+} from "./tools/site-3d-dxf.js"
 
 export interface McpTool {
   name: string
@@ -69,6 +75,7 @@ export const allTools: McpTool[] = [
     description:
       "[통합리포트] 지번 주소로 요청정보+토지이용계획+지적도를 한 페이지 DXF로 내보내기 " +
       "(좌: 요청정보 / 우상단: 토지이용계획 / 우하단: 지적도). " +
+      "topoDxfPath에 수치지형도 DXF를 주면 지적도 패널에 등고선·건물·도로가 겹쳐 그려짐. " +
       "범위(bufferMeters) 미지정 시 먼저 물어볼 것. 기본 50m.",
     schema: ExportLandReportDxfSchema,
     handler: exportLandReportDxf,
@@ -94,6 +101,20 @@ export const allTools: McpTool[] = [
       "[국가법령] MST로 조문 조회. jo(조번호) 미지정 시 조문 목차만, 지정 시 해당 조문 전체 텍스트 반환.",
     schema: GetNationalLawTextSchema,
     handler: getNationalLawText,
+  },
+  {
+    name: "export_site_3d_dxf",
+    description:
+      "[3D대지분석] 지번 주소 + 수치지형도 DXF로 3D 대지 모델(지형 TIN + 건물 매스) DXF 생성. " +
+      "지형은 실측 등고선/표고점, 건물은 VWorld 층수×층고 추정. topoDxfPath 필요. 범위 미지정 시 먼저 물어볼 것.",
+    schema: ExportSite3dDxfSchema,
+    handler: exportSite3dDxf,
+  },
+  {
+    name: "export_site_3d_dxf_by_pnu",
+    description: "[3D대지분석] PNU(19자리) + 수치지형도 DXF로 3D 대지 모델 생성. topoDxfPath 필요.",
+    schema: ExportSite3dDxfByPnuSchema,
+    handler: exportSite3dDxfByPnu,
   },
 ]
 
