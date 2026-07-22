@@ -3,6 +3,7 @@ import {
   extractCityCandidates,
   extractZonePercent,
   extractOtherFacilityParkingRate,
+  extractFacilityParkingRate,
   articleCitation,
   findSelfAnnexNumber,
 } from "./local-ordinance.js"
@@ -103,6 +104,28 @@ describe("findSelfAnnexNumber", () => {
   it("타법령 인용이 앞에 있어도 뒤에 이 조례 자체 별표가 또 나오면 그것을 찾는다", () => {
     const content = "면제 기준은 영 제8조의 별표 1을 따르되, 세부 설치대상은 별표9와 같다."
     expect(findSelfAnnexNumber(content)).toBe("9")
+  })
+})
+
+describe("extractFacilityParkingRate (건축용도 행 매칭)", () => {
+  const markdown = [
+    "| 시설물 | 설치기준 |",
+    "| --- | --- |",
+    "| 2. 문화 및 집회시설, 판매시설, 업무시설 | 시설면적 150제곱미터당 1대 |",
+    "| 3. 제1종 근린생활시설, 제2종 근린생활시설 | 시설면적 200제곱미터당 1대 |",
+    "| 11. 그 밖의 건축물 | 시설면적 300제곱미터당 1대 |",
+  ].join("\n")
+
+  it("업무시설 키워드로 150㎡ 행을 찾는다", () => {
+    expect(extractFacilityParkingRate(markdown, ["업무시설"])).toBe("시설면적 150제곱미터당 1대")
+  })
+
+  it("근린생활 키워드로 200㎡ 행을 찾는다", () => {
+    expect(extractFacilityParkingRate(markdown, ["근린생활"])).toBe("시설면적 200제곱미터당 1대")
+  })
+
+  it("매칭 행이 없으면 null (호출부가 '기타' 행으로 폴백)", () => {
+    expect(extractFacilityParkingRate(markdown, ["창고"])).toBeNull()
   })
 })
 

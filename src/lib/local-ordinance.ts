@@ -247,6 +247,26 @@ export function extractOtherFacilityParkingRate(markdown: string): string | null
 }
 
 /**
+ * 별표 마크다운 표에서 특정 건축용도 행의 설치기준 셀을 찾는다. rowKeywords 중 하나라도 행
+ * 첫 셀(시설물명)에 포함되면 그 행으로 본다. 못 찾으면 null(호출부가 '기타' 행으로 폴백).
+ */
+export function extractFacilityParkingRate(markdown: string, rowKeywords: string[]): string | null {
+  for (const line of markdown.split("\n")) {
+    if (!line.trim().startsWith("|")) continue
+    const cells = line
+      .split("|")
+      .map((c) => c.trim())
+      .filter(Boolean)
+    if (cells.length < 2) continue
+    const nameCell = cells[0]
+    if (rowKeywords.some((kw) => nameCell.includes(kw))) {
+      return cells[cells.length - 1].replace(/<br\s*\/?>/g, " ").trim()
+    }
+  }
+  return null
+}
+
+/**
  * "영 제6조제1항의 별표 1과 같다"처럼 조문이 이 조례가 아니라 상위법령(영/법/규칙)의
  * 별표를 그대로 인용하는 경우가 많다 — 이 경우 조례 자체에는 별도 기준표가 없다는 뜻이므로,
  * "별표 N"이라는 숫자만 보고 이 조례의 별표 목록에서 N번을 가져오면 안 된다(전혀 다른 별표를
@@ -272,7 +292,10 @@ export function findSelfAnnexNumber(content: string): string | null {
  * 행을 뽑는다. 파일을 못 찾거나 파싱에 실패하면 조번호·별표번호까지만 알려주고
  * (수치를 지어내지 않는다) 관할 지자체 확인을 안내한다.
  */
-export async function getLocalParkingStandard(법정동명: string): Promise<LocalStandardResult | null> {
+export async function getLocalParkingStandard(
+  법정동명: string,
+  rowKeywords?: string[]
+): Promise<LocalStandardResult | null> {
   try {
     for (const city of extractCityCandidates(법정동명)) {
       const ord = await findBestOrdinance(city, "주차장 조례")
@@ -308,11 +331,20 @@ export async function getLocalParkingStandard(법정동명: string): Promise<Loc
         if (!parsed.success || !parsed.markdown) return fallback
 
         const annexSource = `${citation}, [별표${annexNum}] ${target.title.replace(/^\[별표\s*\d+\]\s*/, "")}`
+        // 건축용도가 지정됐으면 해당 용도 행을 먼저 찾는다
+        if (rowKeywords && rowKeywords.length > 0) {
+          const useRate = extractFacilityParkingRate(parsed.markdown, rowKeywords)
+          if (useRate) {
+            return { value: `${rowKeywords[0]}: ${useRate}`, source: annexSource }
+          }
+        }
+        // 용도 미지정이거나 해당 행 못 찾으면 "그 밖(기타)" 행으로 폴백
         const otherRate = extractOtherFacilityParkingRate(parsed.markdown)
         if (otherRate) {
-          return { value: `그 밖(기타) 시설물: ${otherRate}`, source: annexSource }
+          const label = rowKeywords && rowKeywords.length > 0 ? "해당 용도 행 못 찾음 → 그 밖(기타) 시설물" : "그 밖(기타) 시설물"
+          return { value: `${label}: ${otherRate}`, source: annexSource }
         }
-        // "기타" 행을 못 찾으면 표 앞부분이라도 발췌
+        // "기타" 행도 못 찾으면 표 앞부분이라도 발췌
         return { value: parsed.markdown.replace(/\s+/g, " ").trim().slice(0, 300), source: annexSource }
       } catch {
         return fallback

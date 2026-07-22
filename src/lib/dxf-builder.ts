@@ -295,6 +295,7 @@ export interface LandReportInfo {
   법정최대건폐율?: string
   법정최대용적율?: string
   법정조경계획?: string
+  법정주차계획?: string
 }
 
 function drawPanelBorder(dxf: DxfWriter, minX: number, minY: number, maxX: number, maxY: number) {
@@ -531,7 +532,7 @@ export function buildLandReportDxf(
     ["최대용적률(조례)", info.조례최대용적율 || "자동조회 실패 — 관할 지자체 확인 필요"],
     ["조경계획(법령)", info.법정조경계획 || landscapeCell(info.용도지역지구)],
     ["조경계획(조례)", info.조례조경계획 || "자동조회 실패 — 관할 지자체 확인 필요"],
-    ["주차계획(법령)", PARKING_STANDARD_CELL],
+    ["주차계획(법령)", info.법정주차계획 || PARKING_STANDARD_CELL],
     ["주차계획(조례)", info.조례주차계획 || "자동조회 실패 — 관할 지자체 확인 필요"],
   ]
   // 표가 좌측 패널 전체 높이를 그대로 씀 (별도 하단 안내문 없음)

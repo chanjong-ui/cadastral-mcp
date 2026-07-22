@@ -18,7 +18,14 @@ import {
 import { buildLandReportDxf, type LandReportInfo } from "../lib/dxf-builder.js"
 import { readTopoDxf, clipTopoEntities, summarizeTopo, type TopoEntity } from "../lib/topo-dxf-reader.js"
 import { applyXclip } from "../lib/xclip.js"
-import { findZoningStandard, buildingCoverageCell, floorAreaRatioCell, landscapeCell } from "../lib/zoning-standards.js"
+import {
+  findZoningStandard,
+  buildingCoverageCell,
+  floorAreaRatioCell,
+  landscapeCell,
+  nationalParkingCell,
+  resolveParkingUse,
+} from "../lib/zoning-standards.js"
 import {
   getLocalBuildingCoverage,
   getLocalFloorAreaRatio,
@@ -63,6 +70,12 @@ const sharedFields = {
     .describe(
       "(선택) map.ngii.go.kr에서 받은 수치지형도 V1.0 DXF 절대경로. 주면 지적도 패널에 등고선·건물·도로·하천이 함께 겹쳐 그려짐."
     ),
+  buildingUse: z
+    .string()
+    .optional()
+    .describe(
+      "(선택) 건축 용도 (예: 사무소, 제1종근린생활시설, 다세대주택, 창고). 주면 주차계획을 용도별 기준으로 계산. 미지정 시 '그 밖의 건축물'."
+    ),
 }
 
 export const ExportLandReportDxfSchema = z.object({
@@ -82,7 +95,8 @@ async function buildAndWriteReport(
   bufferMeters: number,
   stdrYear: string | undefined,
   refinedAddress?: string,
-  topoDxfPath?: string
+  topoDxfPath?: string,
+  buildingUse?: string
 ) {
   const target = await getParcelGeometry(pnu, crs)
   if (!target || target.polygons.length === 0) {
@@ -134,6 +148,8 @@ async function buildAndWriteReport(
   // 검증된 상수로 폴백한다(주차는 별표 파싱이 아직 없어 처음부터 상수만 씀, national-law.ts 주석 참고).
   // 조례 쪽이 실패하면(null) info에 undefined로 남고, dxf-builder.ts가 "자동조회 실패" 문구로 채운다.
   const zoneMatch = findZoningStandard(landUseZones)
+  // 건축용도가 있으면 주차장법 별표1 용도 분류로 해석 → 조례 별표에서도 그 용도 행을 우선 찾는다
+  const parkingRule = resolveParkingUse(buildingUse)
   const [localCoverage, localFar, localLandscape, localParking, nationalCoverage, nationalFar, nationalLandscape] =
     await Promise.all([
       // 건폐율/용적률은 용도지역명이 있어야 조문 안에서 값을 특정할 수 있어 매칭 실패 시 스킵
@@ -141,7 +157,7 @@ async function buildAndWriteReport(
       zoneMatch ? getLocalFloorAreaRatio(법정동명, zoneMatch.zoneName) : Promise.resolve(null),
       // 조경/주차는 용도지역명과 무관하게 시/군 조례만 찾으면 되므로 항상 시도
       getLocalLandscapeStandard(법정동명),
-      getLocalParkingStandard(법정동명),
+      getLocalParkingStandard(법정동명, parkingRule?.rowKeywords),
       zoneMatch ? getNationalBuildingCoverage(zoneMatch.zoneName) : Promise.resolve(null),
       zoneMatch ? getNationalFloorAreaRatio(zoneMatch.zoneName) : Promise.resolve(null),
       getNationalLandscapeStandard(landUseZones),
@@ -176,6 +192,8 @@ async function buildAndWriteReport(
     법정조경계획: nationalLandscape
       ? `${nationalLandscape.value} (${nationalLandscape.source})`
       : landscapeCell(landUseZones),
+    // 국가법령 주차: 건축용도 있으면 용도별 기준(주차장법 별표1), 없으면 '그 밖의 건축물'
+    법정주차계획: nationalParkingCell(buildingUse),
   }
 
   const { dxfText, mapBlockName, mapClipBox } = buildLandReportDxf(target, neighbors, queryBBox, info, topoEntities)
@@ -203,6 +221,12 @@ async function buildAndWriteReport(
       조경: info.조례조경계획 ? "조회 성공 — 법령·조례 값 함께 표에 표시" : "조회 실패 — 조례 칸에 실패 안내 표시",
       주차: info.조례주차계획 ? "조회 성공 — 법령·조례 값 함께 표에 표시" : "조회 실패 — 조례 칸에 실패 안내 표시",
     },
+    건축용도_주차: {
+      입력용도: buildingUse || "미지정",
+      적용분류: parkingRule
+        ? `${parkingRule.category} (${parkingRule.rate})`
+        : "그 밖의 건축물 300㎡당 1대 (용도 미지정 또는 미분류)",
+    },
     국가법령_조회: {
       건폐율: nationalCoverage ? "법제처 API 실시간 조회 성공" : "실시간 조회 실패 — 검증된 고정값으로 대체",
       용적률: nationalFar ? "법제처 API 실시간 조회 성공" : "실시간 조회 실패 — 검증된 고정값으로 대체",
@@ -223,7 +247,7 @@ export async function exportLandReportDxf(
   args: z.infer<typeof ExportLandReportDxfSchema>
 ): Promise<ToolResponse> {
   try {
-    const { address, crs, includeNeighbors, bufferMeters, stdrYear, topoDxfPath } = args
+    const { address, crs, includeNeighbors, bufferMeters, stdrYear, topoDxfPath, buildingUse } = args
     const { pnu, refinedAddress } = await addressToPnu(address)
     const result = await buildAndWriteReport(
       pnu,
@@ -232,7 +256,8 @@ export async function exportLandReportDxf(
       bufferMeters ?? DEFAULT_BUFFER_METERS,
       stdrYear,
       refinedAddress,
-      topoDxfPath
+      topoDxfPath,
+      buildingUse
     )
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
   } catch (error) {
@@ -245,7 +270,7 @@ export async function exportLandReportDxfByPnu(
   args: z.infer<typeof ExportLandReportDxfByPnuSchema>
 ): Promise<ToolResponse> {
   try {
-    const { pnu, crs, includeNeighbors, bufferMeters, stdrYear, topoDxfPath } = args
+    const { pnu, crs, includeNeighbors, bufferMeters, stdrYear, topoDxfPath, buildingUse } = args
     if (pnu.length !== 19) {
       return {
         content: [{ type: "text", text: `[ERROR] PNU는 19자리여야 합니다. 입력: ${pnu} (${pnu.length}자리)` }],
@@ -259,7 +284,8 @@ export async function exportLandReportDxfByPnu(
       bufferMeters ?? DEFAULT_BUFFER_METERS,
       stdrYear,
       undefined,
-      topoDxfPath
+      topoDxfPath,
+      buildingUse
     )
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
   } catch (error) {

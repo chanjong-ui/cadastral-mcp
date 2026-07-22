@@ -83,5 +83,58 @@ export function landscapeCell(zones: string[]): string {
   return "면적·용도별 기준 상이 — 조례 확인 필요"
 }
 
-/** 표에 넣을 "법정주차계획" 셀 텍스트 (주차장법 시행령 별표1) — 건축 용도가 정해져야 정확한 기준 적용 가능 */
+/** 표에 넣을 "법정주차계획" 셀 텍스트 (주차장법 시행령 별표1) — 건축 용도 미지정 시 catch-all */
 export const PARKING_STANDARD_CELL = "그 밖의 건축물: 300m2당 1대 (용도별 별도 기준 있음)"
+
+/**
+ * 주차장법 시행령 별표1 용도 분류 → 설치기준. 건축용도(자유 텍스트)를 키워드로 분류한다.
+ * 순서 중요 — 더 구체적인 것(오피스텔·근린생활 종 구분)을 위에 둔다.
+ * 별표 원문 대조 완료(2026-07, MST 273373).
+ */
+export interface ParkingUseRule {
+  category: string
+  rate: string
+  /** 조례 별표 표에서 이 용도 행을 찾을 때 쓸 키워드(행 텍스트에 포함되면 매칭) */
+  rowKeywords: string[]
+}
+
+const PARKING_USE_RULES: { match: RegExp; rule: ParkingUseRule }[] = [
+  { match: /위락/, rule: { category: "위락시설", rate: "시설면적 100㎡당 1대", rowKeywords: ["위락"] } },
+  { match: /오피스텔/, rule: { category: "업무시설 중 오피스텔", rate: "「주택건설기준」 제27조(전용면적별 산정)", rowKeywords: ["오피스텔"] } },
+  { match: /(제?1종\s*근린|1종근린)/, rule: { category: "제1종 근린생활시설", rate: "시설면적 200㎡당 1대", rowKeywords: ["제1종 근린생활", "1종 근린", "근린생활"] } },
+  { match: /(제?2종\s*근린|2종근린)/, rule: { category: "제2종 근린생활시설", rate: "시설면적 200㎡당 1대", rowKeywords: ["제2종 근린생활", "2종 근린", "근린생활"] } },
+  { match: /근린생활/, rule: { category: "근린생활시설", rate: "시설면적 200㎡당 1대", rowKeywords: ["근린생활"] } },
+  { match: /숙박/, rule: { category: "숙박시설", rate: "시설면적 200㎡당 1대", rowKeywords: ["숙박"] } },
+  { match: /(업무|사무소|사무실|오피스(?!텔))/, rule: { category: "업무시설", rate: "시설면적 150㎡당 1대", rowKeywords: ["업무시설"] } },
+  { match: /(판매|상점|백화점|쇼핑|마트|시장)/, rule: { category: "판매시설", rate: "시설면적 150㎡당 1대", rowKeywords: ["판매시설"] } },
+  { match: /(문화|집회|공연|전시|영화|예식)/, rule: { category: "문화 및 집회시설", rate: "시설면적 150㎡당 1대", rowKeywords: ["문화 및 집회", "집회시설"] } },
+  { match: /종교/, rule: { category: "종교시설", rate: "시설면적 150㎡당 1대", rowKeywords: ["종교시설"] } },
+  { match: /(운수|터미널|정류장|여객)/, rule: { category: "운수시설", rate: "시설면적 150㎡당 1대", rowKeywords: ["운수시설"] } },
+  { match: /(의료|병원|의원)/, rule: { category: "의료시설", rate: "시설면적 150㎡당 1대", rowKeywords: ["의료시설"] } },
+  { match: /장례/, rule: { category: "장례식장", rate: "시설면적 150㎡당 1대", rowKeywords: ["장례"] } },
+  { match: /운동/, rule: { category: "운동시설", rate: "시설면적 150㎡당 1대(골프장·옥외수영장 등 제외)", rowKeywords: ["운동시설"] } },
+  { match: /창고/, rule: { category: "창고시설", rate: "시설면적 400㎡당 1대", rowKeywords: ["창고"] } },
+  { match: /(공장|제조)/, rule: { category: "공장", rate: "시설면적 350㎡당 1대(아파트형 제외)", rowKeywords: ["공장"] } },
+  { match: /수련/, rule: { category: "수련시설", rate: "시설면적 350㎡당 1대", rowKeywords: ["수련"] } },
+  { match: /발전/, rule: { category: "발전시설", rate: "시설면적 350㎡당 1대", rowKeywords: ["발전"] } },
+  { match: /다가구/, rule: { category: "다가구주택", rate: "「주택건설기준」 제27조(세대별 산정)", rowKeywords: ["다가구", "공동주택"] } },
+  { match: /(공동주택|아파트|연립|다세대)/, rule: { category: "공동주택", rate: "「주택건설기준」 제27조(세대별 산정)", rowKeywords: ["공동주택"] } },
+  { match: /단독/, rule: { category: "단독주택", rate: "50㎡초과~150㎡ 이하: 1대, 150㎡ 초과: 1대+초과 100㎡당 1대", rowKeywords: ["단독주택"] } },
+]
+
+/** 건축용도(자유 텍스트) → 주차장법 별표1 분류 규칙. 매칭 안 되면 null(그 밖의 건축물) */
+export function resolveParkingUse(buildingUse?: string): ParkingUseRule | null {
+  if (!buildingUse) return null
+  const u = buildingUse.replace(/\s+/g, "")
+  for (const { match, rule } of PARKING_USE_RULES) {
+    if (match.test(buildingUse) || match.test(u)) return rule
+  }
+  return null
+}
+
+/** 표에 넣을 국가법령 주차 셀 — 건축용도 있으면 용도별 기준, 없으면 catch-all */
+export function nationalParkingCell(buildingUse?: string): string {
+  const rule = resolveParkingUse(buildingUse)
+  if (!rule) return PARKING_STANDARD_CELL
+  return `${rule.category}: ${rule.rate} (주차장법 시행령 별표1)`
+}
